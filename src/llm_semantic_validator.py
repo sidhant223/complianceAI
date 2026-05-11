@@ -28,8 +28,8 @@ def build_semantic_validation_prompt(finding: dict) -> str:
     expected_requirement = finding.get("expected_requirement", "Not provided")
     rule_status = finding.get("status") or finding.get("rule_status", "Unknown")
 
-    evidence_text = format_evidence_for_prompt(finding.get("evidence", []), max_items=1, max_chars=350)
-    candidate_text = format_evidence_for_prompt(finding.get("candidate_evidence", []), max_items=1, max_chars=350)
+    evidence_text = format_evidence_for_prompt(finding.get("evidence", []), max_items=2, max_chars=500)
+    candidate_text = format_evidence_for_prompt(finding.get("candidate_evidence", []), max_items=2, max_chars=500)
 
     prompt = f"""
 You are reviewing ONE audit finding.
@@ -68,7 +68,7 @@ JSON format:
 
     return prompt.strip()
 
-def format_evidence_for_prompt(evidence_items, max_items: int = 1, max_chars: int = 450) -> str:
+def format_evidence_for_prompt(evidence_items, max_items: int = 2, max_chars: int = 500) -> str:
     """
     Converts evidence into very compact text for local Ollama.
     Sequential mode stays enabled, so the compromise is prompt size, not review count.

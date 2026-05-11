@@ -2,6 +2,10 @@ def is_table_of_contents_or_heading(snippet: str) -> bool:
     """
     Rejects table-of-contents, index, or heading-only candidate snippets.
     Candidate evidence must be substantive enough for audit review.
+
+    This is the shared TOC/heading filter used by both:
+    - src.evidence_context_filter
+    - src.tpmr_checker via is_table_of_contents_snippet() wrapper
     """
 
     text = str(snippet or "").lower().strip()
@@ -15,27 +19,31 @@ def is_table_of_contents_or_heading(snippet: str) -> bool:
         "page no",
         "page number",
         "list of tables",
-        "list of figures"
+        "list of figures",
     ]
 
     if any(term in text for term in toc_terms):
         return True
 
-    if "....." in text or "……" in text:
+    if "....." in text or "……" in text or "…." in text:
         return True
 
-    if len(text.split()) <= 10:
-        weak_heading_terms = [
-            "right to audit",
-            "data deletion",
-            "termination",
-            "audit",
-            "access",
-            "offboarding"
-        ]
+    words = text.split()
+    weak_heading_terms = [
+        "right to audit",
+        "data deletion",
+        "termination",
+        "audit",
+        "access",
+        "offboarding",
+        "security assessment",
+        "incident notification",
+        "penetration testing",
+        "data classification",
+    ]
 
-        if any(term in text for term in weak_heading_terms):
-            return True
+    if len(words) <= 10 and any(term in text for term in weak_heading_terms):
+        return True
 
     return False
 
@@ -45,7 +53,6 @@ def is_relevant_candidate_evidence(finding: dict, evidence_item: dict) -> bool:
     Filters candidate evidence that matched a keyword but not the real control intent.
     """
 
-    control_id = str(finding.get("control_id", "")).lower()
     control = str(finding.get("control", "")).lower()
     expected = str(finding.get("expected_requirement", "")).lower()
     snippet = str(evidence_item.get("snippet", "")).lower()
@@ -67,7 +74,7 @@ def is_relevant_candidate_evidence(finding: dict, evidence_item: dict) -> bool:
         "right to access",
         "right to correction",
         "right to erasure",
-        "grievance"
+        "grievance",
     ]
 
     admin_rfp_terms = [
@@ -83,7 +90,7 @@ def is_relevant_candidate_evidence(finding: dict, evidence_item: dict) -> bool:
         "contract administrator",
         "assignment",
         "subcontract",
-        "prior written consent from the city"
+        "prior written consent from the city",
     ]
 
     is_dpdp_control = (
@@ -123,7 +130,8 @@ def filter_candidate_evidence_for_findings(findings: list[dict]) -> list[dict]:
         if removed_count > 0:
             finding_copy["evidence_filter_note"] = (
                 f"{removed_count} candidate evidence snippet(s) were discarded "
-                "because they appeared to match administrative/RFP language rather than the control intent."
+                "because they appeared to match headings, TOC text, or administrative/RFP language "
+                "rather than the control intent."
             )
 
         filtered_findings.append(finding_copy)

@@ -1,4 +1,5 @@
 import re
+from src.evidence_context_filter import is_table_of_contents_or_heading
 
 NEGATIVE_PHRASES = [
     "no evidence",
@@ -707,11 +708,7 @@ def evidence_strength_rank(strength: str) -> int:
     return {"weak": 1, "medium": 2, "strong": 3}.get(strength, 0)
 
 
-def strongest_positive_evidence_strength(evidence: list[dict]) -> str:
-    positives = [item.get("section_strength", "medium") for item in evidence if item.get("sentiment") == "positive"]
-    if not positives:
-        return "weak"
-    return max(positives, key=evidence_strength_rank)
+# Removed duplicate definition lines 711-715; enhanced definition is kept later in this file.
 
 
 def strongest_negative_signal(evidence: list[dict]) -> str | None:
@@ -800,156 +797,7 @@ def analyze_tpmr_compliance(
     }
 
 
-def analyze_single_tpmr_control(
-    control_id: str,
-    control: dict,
-    pages: list[dict],
-    document_context: dict | None = None
-) -> dict:
-    evidence = []
-    matched_keywords = []
-
-    keywords = control.get("keywords", [])
-    regex_patterns = control.get("regex", [])
-
-    for page in pages:
-        page_number = get_page_number(page)
-        text = page["text"]
-        lower_text = text.lower()
-        section_header = extract_section_header(text)
-        section_strength = tag_section_strength(section_header or text)
-        record_section_context(document_context, page_number, section_header, section_strength)
-
-        for keyword in keywords:
-            if keyword.lower() in lower_text:
-                snippet = get_evidence_snippet(text, keyword)
-
-                if is_table_of_contents_snippet(snippet):
-                    continue
-
-                if not has_required_context(snippet, control):
-                    continue
-
-                if keyword not in matched_keywords:
-                    matched_keywords.append(keyword)
-
-                sentiment = sentiment_from_negative_signal(snippet, section_strength, document_context)
-
-                evidence.append({
-                    "page": page_number,
-                    "keyword": keyword,
-                    "match_type": "keyword",
-                    "sentiment": sentiment,
-                    "negative_signal": detect_audit_negative_signal(snippet, section_strength, document_context),
-                    "section_strength": section_strength,
-                    "section_header": section_header,
-                    "candidate_score": weighted_candidate_score(section_strength, is_audit_report_mode(document_context)),
-                    "snippet": snippet
-                })
-
-        for pattern in regex_patterns:
-            matches = re.finditer(pattern, text, flags=re.IGNORECASE)
-
-            for match in matches:
-                matched_text = match.group(0)
-                snippet = expand_regex_snippet(text, match)
-
-                if is_table_of_contents_snippet(snippet):
-                    continue
-
-                if not has_required_context(snippet, control):
-                    continue
-
-                if matched_text not in matched_keywords:
-                    matched_keywords.append(matched_text)
-
-                sentiment = sentiment_from_negative_signal(snippet, section_strength, document_context)
-
-                evidence.append({
-                    "page": page_number,
-                    "keyword": matched_text,
-                    "match_type": "regex",
-                    "sentiment": sentiment,
-                    "negative_signal": detect_audit_negative_signal(snippet, section_strength, document_context),
-                    "section_strength": section_strength,
-                    "section_header": section_header,
-                    "candidate_score": weighted_candidate_score(section_strength, is_audit_report_mode(document_context)),
-                    "snippet": snippet
-                })
-
-    evidence = deduplicate_evidence(evidence)
-    evidence.sort(key=lambda item: item.get("candidate_score", 0), reverse=True)
-
-    paragraph_fallback_controls = {
-        "right_to_audit",
-        "data_deletion_after_termination",
-        "incident_response_sla",
-        "penetration_testing_requirement",
-        "data_classification_framework"
-    }
-
-    if control_id in paragraph_fallback_controls and not evidence:
-        fallback_evidence = find_paragraph_evidence_for_control(
-            pages=pages,
-            control_id=control_id,
-            control=control,
-            max_results=3,
-            document_context=document_context
-        )
-        evidence.extend(fallback_evidence)
-        evidence = deduplicate_evidence(evidence)
-
-    default_status = determine_tpmr_control_status(evidence)
-    positive_evidence_found = count_evidence_by_sentiment(evidence, "positive") > 0
-    positive_evidence_strength = strongest_positive_evidence_strength(evidence)
-    negative_signal = strongest_negative_signal(evidence)
-
-    status = resolve_tpmr_status(
-        positive_evidence_found=positive_evidence_found,
-        positive_evidence_strength=positive_evidence_strength,
-        negative_signal=negative_signal,
-        audit_report_mode=is_audit_report_mode(document_context),
-        default_rule_status=default_status
-    )
-    risk = determine_tpmr_control_risk(control_id, status, control)
-    recommendation = generate_tpmr_recommendation(control["title"], status, control)
-
-    positive_evidence_count = count_evidence_by_sentiment(evidence, "positive")
-    negative_evidence_count = count_evidence_by_sentiment(evidence, "negative")
-    neutral_evidence_count = count_evidence_by_sentiment(evidence, "neutral")
-
-    candidate_evidence = get_candidate_evidence_for_control(
-        pages=pages,
-        control_id=control_id,
-        document_context=document_context
-    )
-
-    return {
-        "control_id": control_id,
-        "control_title": control["title"],
-        "control": control["title"],
-        "description": control["description"],
-        "expected_requirement": TPMR_CONTROL_REQUIREMENTS.get(
-            control_id,
-            "The document should clearly address this vendor risk control requirement."
-        ),
-        "status": status,
-        "risk": risk,
-        "is_privacy_overlay": control.get("privacy_overlay", False),
-        "matched_keywords": matched_keywords,
-        "evidence_count": len(evidence),
-        "positive_evidence_count": positive_evidence_count,
-        "negative_evidence_count": negative_evidence_count,
-        "neutral_evidence_count": neutral_evidence_count,
-        "evidence": evidence[:10],
-        "candidate_evidence": candidate_evidence,
-        "negative_signal": negative_signal or "None",
-        "negative_signal_source": negative_signal_source(evidence),
-        "positive_evidence_strength": positive_evidence_strength,
-        "audit_report_mode": is_audit_report_mode(document_context),
-        "recommendation": recommendation,
-        "final_status": status
-    }
+# Removed duplicate definition lines 804-953; enhanced definition is kept later in this file.
 
 
 def detect_evidence_sentiment(snippet: str) -> str:
@@ -1003,23 +851,7 @@ def normalize_snippet_for_dedup(snippet: str) -> str:
     )
 
 
-def determine_tpmr_control_status(evidence: list[dict]) -> str:
-    if len(evidence) == 0:
-        return "Missing"
-
-    positive_count = count_evidence_by_sentiment(evidence, "positive")
-    negative_count = count_evidence_by_sentiment(evidence, "negative")
-
-    if negative_count > 0 and positive_count == 0:
-        return "Failed"
-
-    if negative_count > 0 and positive_count > 0:
-        return "Partially Compliant"
-
-    if positive_count == 1:
-        return "Partially Compliant"
-
-    return "Present"
+# Removed duplicate definition lines 1007-1023; enhanced definition is kept later in this file.
 
 
 def determine_tpmr_control_risk(control_id: str, status: str, control: dict) -> str:
@@ -1217,44 +1049,11 @@ def expand_to_full_words_or_clause(text: str, start: int, end: int) -> str:
 
 def is_table_of_contents_snippet(snippet: str) -> bool:
     """
-    Rejects table-of-contents, index, or heading-only snippets.
-    These snippets are not substantive audit evidence.
+    Shared wrapper for TOC/heading filtering.
+    The actual logic lives in src.evidence_context_filter so candidate evidence
+    and TPMR evidence use the same rule.
     """
-
-    text = str(snippet or "").lower().strip()
-
-    if not text:
-        return True
-
-    toc_indicators = [
-        "table of contents",
-        "contents",
-        "page no",
-        "page number",
-        "list of tables",
-        "list of figures"
-    ]
-
-    if any(indicator in text for indicator in toc_indicators):
-        return True
-
-    if "....." in text or "……" in text:
-        return True
-
-    words = text.split()
-    heading_like_terms = [
-        "termination",
-        "audit",
-        "access",
-        "deletion",
-        "data handling",
-        "right to audit"
-    ]
-
-    if len(words) <= 10 and any(term in text for term in heading_like_terms):
-        return True
-
-    return False
+    return is_table_of_contents_or_heading(snippet)
 
 
 def split_pages_into_paragraphs(
@@ -1298,57 +1097,7 @@ def split_pages_into_paragraphs(
     return chunks
 
 
-def find_paragraph_evidence_for_control(
-    pages: list[dict],
-    control_id: str,
-    control: dict,
-    max_results: int = 3,
-    document_context: dict | None = None
-) -> list[dict]:
-    """
-    Finds paragraph-level evidence for important controls.
-    This helps catch clauses where exact keyword-window matching fails.
-    """
-
-    keywords = list(control.get("keywords", []))
-    keywords.extend(TPMR_CANDIDATE_KEYWORDS.get(control_id, []))
-
-    chunks = split_pages_into_paragraphs(pages, document_context=document_context)
-    results = []
-
-    for chunk in chunks:
-        snippet = chunk.get("snippet", "")
-        lower_snippet = snippet.lower()
-
-        matched_keywords = [
-            keyword
-            for keyword in keywords
-            if str(keyword).lower() in lower_snippet
-        ]
-
-        if not matched_keywords:
-            continue
-
-        if not has_required_context(snippet, control):
-            continue
-
-        sentiment = sentiment_from_negative_signal(snippet, chunk.get("section_strength", "medium"), document_context)
-
-        results.append({
-            "page": chunk.get("page", "N/A"),
-            "keyword": ", ".join(matched_keywords[:3]),
-            "match_type": "paragraph_fallback",
-            "sentiment": sentiment,
-            "negative_signal": detect_audit_negative_signal(snippet, chunk.get("section_strength", "medium"), document_context),
-            "section_strength": chunk.get("section_strength", "medium"),
-            "section_header": chunk.get("section_header", "N/A"),
-            "candidate_score": chunk.get("candidate_score", 0),
-            "snippet": snippet
-        })
-
-
-    results.sort(key=lambda item: item.get("candidate_score", 0), reverse=True)
-    return results[:max_results]
+# Removed duplicate definition lines 1302-1352; enhanced definition is kept later in this file.
 
 
 def get_candidate_evidence_for_control(

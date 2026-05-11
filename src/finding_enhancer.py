@@ -1,335 +1,262 @@
-def enhance_findings_for_consulting(findings: list[dict]) -> list[dict]:
-    """
-    Adds senior-manager style metadata to each finding:
-    - regulatory mapping
-    - remediation guidance
-    - entity boundary review
+"""Consulting-style finding enrichment for ComplianceAI.
 
-    This is intentionally simple and rule-based.
-    """
+This module is intentionally deterministic. It adds metadata used by the final
+JSON/PDF report, but it does not change rule-engine scores or statuses.
+"""
 
-    enhanced_findings = []
-
-    for finding in findings:
-        finding_copy = finding.copy()
-
-        finding_copy["regulatory_mapping"] = get_regulatory_mapping(finding_copy)
-        finding_copy["remediation"] = get_remediation(finding_copy)
-        finding_copy["entity_boundary_review"] = get_entity_boundary_review(finding_copy)
-
-        if finding_copy["entity_boundary_review"]["source_mismatch"]:
-            finding_copy["source_attribution_review_required"] = True
-            finding_copy["original_source"] = finding_copy.get("source")
-            finding_copy["source"] = finding_copy["entity_boundary_review"]["expected_source"]
-            finding_copy["final_status"] = "Needs Manual Review"
-            finding_copy["rerouting_note"] = (
-                f"Finding source was re-routed from {finding_copy.get('original_source')} "
-                f"to {finding_copy.get('source')} based on entity-boundary review."
-    )
-
-        enhanced_findings.append(finding_copy)
-
-    return enhanced_findings
-
-
-def get_regulatory_mapping(finding: dict) -> dict:
-    control_id = str(finding.get("control_id", "")).lower()
-    source = str(finding.get("source", "")).upper()
-
-    dpdp_map = {
-        "notice": {
-            "legal_reference": "DPDP Act, 2023 - Section 5",
-            "requirement_summary": "Notice should explain personal data processing purpose, rights, and complaint mechanism.",
-            "penalty_exposure": "General DPDP non-compliance exposure; exact penalty depends on Board assessment."
-        },
-        "consent": {
-            "legal_reference": "DPDP Act, 2023 - Section 6",
-            "requirement_summary": "Consent must be free, specific, informed, unconditional, and unambiguous.",
-            "penalty_exposure": "General DPDP non-compliance exposure."
-        },
-        "withdrawal_of_consent": {
-            "legal_reference": "DPDP Act, 2023 - Section 6",
-            "requirement_summary": "Data Principal should be able to withdraw consent.",
-            "penalty_exposure": "General DPDP non-compliance exposure."
-        },
-        "security_safeguards": {
-            "legal_reference": "DPDP Act, 2023 - Section 8(5)",
-            "requirement_summary": "Data Fiduciary must protect personal data using reasonable security safeguards.",
-            "penalty_exposure": "Higher exposure; failure of reasonable security safeguards may attract penalty up to ₹250 crore."
-        },
-        "breach_notification": {
-            "legal_reference": "DPDP Act, 2023 - Section 8(6)",
-            "requirement_summary": "Data Fiduciary must notify the Board and affected Data Principals after personal data breach.",
-            "penalty_exposure": "Higher exposure; breach notification failure may attract penalty up to ₹200 crore."
-        },
-        "data_principal_rights": {
-            "legal_reference": "DPDP Act, 2023 - Sections 11-14",
-            "requirement_summary": "Covers access, correction, erasure, grievance redressal, and nomination rights.",
-            "penalty_exposure": "General DPDP non-compliance exposure."
-        },
-        "data_retention": {
-            "legal_reference": "DPDP Act, 2023 - Section 8(7)",
-            "requirement_summary": "Personal data should be erased when purpose is complete or consent is withdrawn unless retention is required by law.",
-            "penalty_exposure": "General DPDP non-compliance exposure."
-        }
-    }
-
-    tpmr_map = {
-        "vendor_due_diligence": {
-            "legal_reference": "Third-Party Risk Management Control",
-            "requirement_summary": "Vendors should be assessed before onboarding or contract award.",
-            "penalty_exposure": "Contractual, operational, and governance exposure."
-        },
-        "vendor_breach_notification": {
-            "legal_reference": "Third-Party Incident Notification Control",
-            "requirement_summary": "Vendors should be required to notify the organization of incidents or breaches.",
-            "penalty_exposure": "May increase DPDP exposure if vendor processes personal data."
-        },
-        "data_processing_agreement": {
-            "legal_reference": "DPDP Act, 2023 - Section 8(2) + Vendor Contract Governance",
-            "requirement_summary": "Data Processor should process personal data only under valid contract.",
-            "penalty_exposure": "Privacy and vendor governance exposure."
-        },
-        "right_to_audit": {
-            "legal_reference": "Third-Party Audit Rights Control",
-            "requirement_summary": "Contracts should allow audit, inspection, or assurance review of vendor controls.",
-            "penalty_exposure": "Assurance and evidence gap."
-        },
-        "security_assessment": {
-            "legal_reference": "Vendor Security Assessment Control",
-            "requirement_summary": "Vendors should undergo security review or control validation.",
-            "penalty_exposure": "Operational and security risk."
-        }
-    }
-
-    if source == "DPDP":
-        return dpdp_map.get(control_id, default_mapping())
-
-    if source == "TPMR":
-        return tpmr_map.get(control_id, default_mapping())
-
-    return default_mapping()
+from __future__ import annotations
 
 
 def default_mapping() -> dict:
     return {
-        "legal_reference": "Internal Control Framework",
-        "requirement_summary": "No specific regulatory mapping configured for this control.",
-        "penalty_exposure": "Requires manual audit/legal review."
+        "framework": "Internal Control Framework",
+        "control_area": "Governance / Documentation",
+        "reference": "Internal policy and audit control expectations",
+        "legal_or_regulatory_relevance": "Supports auditability, accountability, and operational risk governance.",
     }
 
 
-def get_remediation(finding: dict) -> dict:
-    control_id = str(finding.get("control_id", "")).lower()
-    risk = str(finding.get("risk", "Medium"))
-    status = str(finding.get("final_status") or finding.get("status", ""))
+def get_regulatory_mapping(control_id: str, source: str | None = None) -> dict:
+    """Returns deterministic mapping metadata for DPDP and TPMR controls."""
 
-    remediation_map = {
-        "security_safeguards": {
-            "owner": "IT Security / CISO Office",
-            "complexity": "High",
-            "effort": "2-6 weeks",
-            "steps": [
-                "Define minimum security safeguards for personal data.",
-                "Implement encryption at rest and in transit where applicable.",
-                "Mandate MFA for sensitive access.",
-                "Document logging, monitoring, and incident response controls."
-            ]
-        },
-        "breach_notification": {
-            "owner": "Legal / Compliance / Security Operations",
-            "complexity": "Medium",
-            "effort": "1-3 weeks",
-            "steps": [
-                "Define breach identification criteria.",
-                "Create breach escalation workflow.",
-                "Define Board and Data Principal notification responsibilities.",
-                "Maintain breach register and notification evidence."
-            ]
-        },
-        "withdrawal_of_consent": {
-            "owner": "Legal / Privacy Office / Product Team",
-            "complexity": "Medium",
-            "effort": "2-4 weeks",
-            "steps": [
-                "Define consent withdrawal process.",
-                "Create request intake and validation workflow.",
-                "Stop processing where consent is withdrawn.",
-                "Maintain consent withdrawal logs."
-            ]
+    control_id = str(control_id or "").lower().strip()
+    source = str(source or "").upper().strip()
+
+    dpdp_map = {
+        "consent_management": {
+            "framework": "DPDP / Privacy Governance",
+            "control_area": "Consent and lawful processing",
+            "reference": "Consent, notice, and purpose limitation expectations",
+            "legal_or_regulatory_relevance": "Helps validate whether personal-data processing has clear user-facing controls.",
         },
         "data_principal_rights": {
-            "owner": "Privacy Office / Legal / Support Team",
-            "complexity": "Medium",
-            "effort": "2-4 weeks",
-            "steps": [
-                "Create request workflow for access, correction, erasure, grievance, and nomination.",
-                "Define verification process.",
-                "Assign request owner and response timeline.",
-                "Maintain rights request register."
-            ]
+            "framework": "DPDP / Privacy Governance",
+            "control_area": "Data principal rights",
+            "reference": "Access, correction, erasure, and grievance handling expectations",
+            "legal_or_regulatory_relevance": "Supports privacy-rights operational readiness and defensible user handling.",
+        },
+        "security_safeguards": {
+            "framework": "DPDP / Security Safeguards",
+            "control_area": "Security safeguards",
+            "reference": "Reasonable security safeguards and breach prevention expectations",
+            "legal_or_regulatory_relevance": "Supports privacy/security governance for protected data.",
+        },
+        "breach_notification": {
+            "framework": "DPDP / Incident Governance",
+            "control_area": "Breach and incident notification",
+            "reference": "Breach reporting and escalation expectations",
+            "legal_or_regulatory_relevance": "Supports timely escalation and accountability for personal-data incidents.",
+        },
+        "third_party_processing": {
+            "framework": "DPDP / Processor Governance",
+            "control_area": "Third-party processing",
+            "reference": "Processor oversight and contractual processing expectations",
+            "legal_or_regulatory_relevance": "Supports accountability where third parties process or access personal data.",
+        },
+    }
+
+    tpmr_map = {
+        "vendor_due_diligence": {
+            "framework": "TPMR / Vendor Risk Management",
+            "control_area": "Vendor due diligence",
+            "reference": "Pre-onboarding due diligence and third-party screening",
+            "legal_or_regulatory_relevance": "Supports defensible vendor onboarding and risk-based third-party selection.",
+        },
+        "vendor_risk_rating": {
+            "framework": "TPMR / Vendor Risk Management",
+            "control_area": "Vendor tiering and risk classification",
+            "reference": "Risk-based classification of vendors by criticality, access, service type, and impact",
+            "legal_or_regulatory_relevance": "Supports proportional oversight and governance routing for high-risk vendors.",
+        },
+        "contractual_safeguards": {
+            "framework": "TPMR / Contract Governance",
+            "control_area": "Contractual safeguards",
+            "reference": "Security, confidentiality, audit, compliance, evidence, and termination clauses",
+            "legal_or_regulatory_relevance": "Supports enforceable vendor obligations and audit rights.",
+        },
+        "data_processing_agreement": {
+            "framework": "TPMR / Privacy Contracting",
+            "control_area": "Data Processing Agreement / Privacy Addendum",
+            "reference": "Processor obligations, processing purpose, privacy addendum, and data-handling terms",
+            "legal_or_regulatory_relevance": "Supports privacy accountability where vendors process or access personal data.",
+        },
+        "right_to_audit": {
+            "framework": "TPMR / Vendor Assurance",
+            "control_area": "Right to audit",
+            "reference": "Audit, inspection, assurance reports, records review, and control validation rights",
+            "legal_or_regulatory_relevance": "Supports independent verification of third-party controls.",
         },
         "vendor_breach_notification": {
-            "owner": "Procurement / Legal / Vendor Risk",
-            "complexity": "Medium",
-            "effort": "2-4 weeks",
-            "steps": [
-                "Add vendor breach notification clause.",
-                "Define vendor notification timeline.",
-                "Create vendor incident escalation contact.",
-                "Track third-party incident notifications."
-            ]
+            "framework": "TPMR / Incident Governance",
+            "control_area": "Vendor breach / security incident notification",
+            "reference": "Vendor incident reporting, escalation, investigation support, and notification obligations",
+            "legal_or_regulatory_relevance": "Supports timely incident response and contractual accountability.",
         },
-        "vendor_due_diligence": {
-            "owner": "Procurement / Vendor Risk Management",
-            "complexity": "Medium",
-            "effort": "2-4 weeks",
-            "steps": [
-                "Create vendor due diligence checklist.",
-                "Classify vendors by criticality and data access.",
-                "Collect compliance evidence before onboarding.",
-                "Document approval and exception handling."
-            ]
-        }
+        "incident_response_sla": {
+            "framework": "TPMR / Incident Governance",
+            "control_area": "Incident response SLA / notification timeline",
+            "reference": "Measurable breach or security incident notification window, such as 24/48/72 hours",
+            "legal_or_regulatory_relevance": "Supports operational readiness and timely escalation of third-party incidents.",
+        },
+        "sub_processor_controls": {
+            "framework": "TPMR / Fourth-Party Risk",
+            "control_area": "Sub-processor / subcontractor / fourth-party controls",
+            "reference": "Approval, notification, monitoring, and flow-down obligations for downstream providers",
+            "legal_or_regulatory_relevance": "Supports control over vendor dependency chains and onward transfer risk.",
+        },
+        "security_assessment": {
+            "framework": "TPMR / Security Assurance",
+            "control_area": "Vendor security assessment",
+            "reference": "Security assessment, questionnaire, certification, independent assurance, or control validation",
+            "legal_or_regulatory_relevance": "Supports evidence-based vendor security oversight.",
+        },
+        "penetration_testing_requirement": {
+            "framework": "TPMR / Security Assurance",
+            "control_area": "Penetration testing / technical security testing",
+            "reference": "Explicit penetration testing, vulnerability testing, remediation evidence, or independent technical testing",
+            "legal_or_regulatory_relevance": "Supports validation of vendor technical controls beyond policy statements.",
+        },
+        "vendor_access_control": {
+            "framework": "TPMR / Access Governance",
+            "control_area": "Vendor access control",
+            "reference": "Least privilege, MFA, approval, recertification, privileged monitoring, and access revocation",
+            "legal_or_regulatory_relevance": "Supports prevention of unauthorized third-party access to systems and data.",
+        },
+        "periodic_vendor_review": {
+            "framework": "TPMR / Ongoing Monitoring",
+            "control_area": "Periodic vendor review",
+            "reference": "Annual/periodic reassessment, monitoring, recertification, and renewal review",
+            "legal_or_regulatory_relevance": "Supports continuous oversight after onboarding.",
+        },
+        "vendor_offboarding": {
+            "framework": "TPMR / Exit Governance",
+            "control_area": "Vendor offboarding",
+            "reference": "Termination, transition, return of assets, access revocation, and exit responsibilities",
+            "legal_or_regulatory_relevance": "Supports orderly vendor exit and reduction of residual access/data risk.",
+        },
+        "data_deletion_after_termination": {
+            "framework": "TPMR / Data Lifecycle",
+            "control_area": "Data return / deletion after termination",
+            "reference": "Return, deletion, destruction, purge certification, or disposal evidence after contract termination",
+            "legal_or_regulatory_relevance": "Supports data minimization and lifecycle accountability after vendor exit.",
+        },
+        "data_classification_framework": {
+            "framework": "TPMR / Data Governance",
+            "control_area": "Data classification framework",
+            "reference": "Formal classification taxonomy and handling requirements by data category",
+            "legal_or_regulatory_relevance": "Supports appropriate vendor handling based on sensitivity of information.",
+        },
+        "children_data_privacy_overlay": {
+            "framework": "TPMR / Privacy Overlay",
+            "control_area": "Children/minors data overlay",
+            "reference": "Controls for vendors processing children/minors data and stricter privacy handling",
+            "legal_or_regulatory_relevance": "Flags higher sensitivity where minors' data may be involved.",
+        },
     }
 
-    selected = remediation_map.get(control_id, {
-        "owner": "Compliance / Control Owner",
-        "complexity": "Medium",
-        "effort": "1-4 weeks",
-        "steps": [
-            "Assign a control owner.",
-            "Update the relevant policy, process, or contract clause.",
-            "Collect implementation evidence.",
-            "Perform manual audit review."
-        ]
-    })
+    if source == "DPDP" and control_id in dpdp_map:
+        return dpdp_map[control_id]
 
-    priority = "High" if risk == "High" or status == "Failed" else "Medium"
+    if source == "TPMR" and control_id in tpmr_map:
+        return tpmr_map[control_id]
+
+    return tpmr_map.get(control_id) or dpdp_map.get(control_id) or default_mapping()
+
+
+def infer_remediation_metadata(finding: dict) -> dict:
+    control_id = str(finding.get("control_id", "")).lower()
+    risk = str(finding.get("risk", "Medium")).lower()
+    status = str(finding.get("status", "")).lower()
+
+    legal_owner_controls = {
+        "data_processing_agreement",
+        "contractual_safeguards",
+        "right_to_audit",
+        "sub_processor_controls",
+        "vendor_offboarding",
+        "data_deletion_after_termination",
+    }
+    security_owner_controls = {
+        "security_assessment",
+        "penetration_testing_requirement",
+        "vendor_access_control",
+        "vendor_breach_notification",
+        "incident_response_sla",
+        "data_classification_framework",
+    }
+
+    if control_id in legal_owner_controls:
+        owner = "Legal / Procurement / Vendor Risk"
+    elif control_id in security_owner_controls:
+        owner = "Information Security / Vendor Risk"
+    else:
+        owner = "Vendor Risk / Control Owner"
+
+    if risk in {"critical", "high"} or status in {"failed", "missing"}:
+        effort = "Medium"
+        target = "30-60 days"
+    else:
+        effort = "Low-Medium"
+        target = "60-90 days"
 
     return {
-        "priority": priority,
-        "action_owner": selected["owner"],
-        "remediation_complexity": selected["complexity"],
-        "estimated_effort": selected["effort"],
-        "remediation_steps": selected["steps"]
+        "owner": owner,
+        "estimated_effort": effort,
+        "target_timeline": target,
     }
 
 
-def get_entity_boundary_review(finding: dict) -> dict:
-    source = str(finding.get("source", "")).upper()
-    control_id = str(finding.get("control_id", "")).lower()
-    control = str(finding.get("control", "")).lower()
-
-    evidence_items = finding.get("evidence", []) + finding.get("candidate_evidence", [])
-
-    combined_text = " ".join(
-        item.get("snippet", "") if isinstance(item, dict) else str(item)
-        for item in evidence_items
-    ).lower()
-
-    vendor_terms = [
-        "vendor",
-        "third party",
-        "third-party",
-        "contractor",
-        "supplier",
-        "subcontractor",
-        "service provider",
-        "processor"
+def infer_entity_boundary(finding: dict) -> dict:
+    text_parts = [
+        str(finding.get("control", "")),
+        str(finding.get("expected_requirement", "")),
+        " ".join(str(item.get("snippet", "")) for item in finding.get("evidence", []) if isinstance(item, dict)),
+        " ".join(str(item.get("snippet", "")) for item in finding.get("candidate_evidence", []) if isinstance(item, dict)),
     ]
+    text = " ".join(text_parts).lower()
 
-    internal_terms = [
-        "we",
-        "our",
-        "company",
-        "organization",
-        "data fiduciary",
-        "data protection board",
-        "data principal",
-        "board",
-        "regulator"
-    ]
+    vendor_terms = ["vendor", "third-party", "third party", "supplier", "service provider", "outsourcing", "processor", "subcontractor", "sub-processor", "fourth-party"]
+    internal_terms = ["employee", "staff", "department", "internal", "business owner", "management", "faculty"]
 
-    # Split into rough sentences so one random vendor word later
-    # does not hijack the whole finding.
-    sentences = split_into_sentences(combined_text)
-
-    vendor_score = 0
-    internal_score = 0
-
-    for sentence in sentences:
-        sentence_has_vendor = any(term in sentence for term in vendor_terms)
-        sentence_has_internal = any(term in sentence for term in internal_terms)
-
-        # Control-specific logic
-        if "vendor" in control_id or "vendor" in control:
-            if sentence_has_vendor:
-                vendor_score += 2
-            if sentence_has_internal and not sentence_has_vendor:
-                internal_score += 2
-        else:
-            if sentence_has_internal:
-                internal_score += 2
-            if sentence_has_vendor:
-                vendor_score += 1
-
-    # Strong DPDP/internal indicators
-    if "data protection board" in combined_text or "data fiduciary" in combined_text:
-        internal_score += 3
-
-    # Strong vendor indicators
-    if "vendor shall" in combined_text or "contractor shall notify" in combined_text:
-        vendor_score += 3
+    vendor_score = sum(1 for term in vendor_terms if term in text)
+    internal_score = sum(1 for term in internal_terms if term in text)
 
     if vendor_score > internal_score:
-        expected_source = "TPMR"
         boundary = "Third-Party / Vendor"
     elif internal_score > vendor_score:
-        expected_source = "DPDP"
-        boundary = "Internal Governance / DPDP"
+        boundary = "Internal / Organization"
     else:
-        expected_source = "Manual Review"
         boundary = "Unclear"
-
-    source_mismatch = (
-        expected_source in ["DPDP", "TPMR"]
-        and source
-        and source != expected_source
-    )
 
     return {
         "entity_boundary": boundary,
-        "current_source": source,
-        "expected_source": expected_source,
-        "source_mismatch": source_mismatch,
         "boundary_scores": {
             "vendor_score": vendor_score,
-            "internal_score": internal_score
+            "internal_score": internal_score,
         },
-        "boundary_note": (
-            "Potential source attribution mismatch. Finding was re-routed and should be manually reviewed."
-            if source_mismatch
-            else "Source attribution appears acceptable or requires no change."
-        )
     }
 
 
-def split_into_sentences(text: str) -> list[str]:
-    separators = [".", ";", "\n"]
+def enhance_findings_for_consulting(findings: list[dict]) -> list[dict]:
+    """Adds consulting/reporting metadata without changing rule-engine decisions."""
 
-    sentences = [text]
+    enhanced = []
 
-    for separator in separators:
-        new_sentences = []
+    for finding in findings or []:
+        item = dict(finding)
+        control_id = item.get("control_id")
+        source = item.get("source")
 
-        for sentence in sentences:
-            new_sentences.extend(sentence.split(separator))
+        item["regulatory_mapping"] = get_regulatory_mapping(control_id, source)
+        item["remediation"] = infer_remediation_metadata(item)
+        item["entity_boundary_review"] = infer_entity_boundary(item)
 
-        sentences = new_sentences
+        if not item.get("recommendation"):
+            item["recommendation"] = (
+                f"Define and evidence a clear control for {item.get('control', 'this area')} with owner, "
+                "frequency, contractual obligation, and review evidence where applicable."
+            )
 
-    return [
-        sentence.strip()
-        for sentence in sentences
-        if sentence.strip()
-    ]
+        enhanced.append(item)
+
+    return enhanced
