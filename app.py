@@ -254,6 +254,24 @@ DOCUMENT_TYPE_PATTERNS = {
         r"\bgovernance framework\b",
         r"\bsupervisory\b",
         r"\bcommittee\b",
+        r"\bprinciples for\b",
+        r"\bthis document supersedes\b",
+        r"\btechnology[- ]agnostic\b",
+        r"\bproportionate basis\b",
+        r"\bmember jurisdictions\b",
+        r"\bprudential standard\b",
+        r"\bsound practices\b",
+    ],
+    "guidance": [
+        r"\bguidance\b",
+        r"\bguidelines?\b",
+        r"\bprinciples for\b",
+        r"\bsound practices\b",
+        r"\bthis document supersedes\b",
+        r"\btechnology[- ]agnostic\b",
+        r"\bproportionate basis\b",
+        r"\bmember jurisdictions\b",
+        r"\bshould\b",
     ],
     "procedure": [
         r"\bprocedure\b",
@@ -283,6 +301,11 @@ AUDIT_FORMAT_PATTERNS = {
             r"\bissue\s+\d+\b",
             r"\bsome improvement needed\b",
             r"\bmajor improvement needed\b",
+            r"\baudit rating\b",
+            r"\bmanagement action plan\b",
+            r"\bIIA states\b",
+            r"\bhigh priority\b.{0,200}\bmedium priority\b",
+            r"\bmedium priority\b.{0,200}\bhigh priority\b",
         ],
     },
     "consulting_management_letter": {
@@ -427,6 +450,9 @@ def classify_document_type(pages: list[dict]) -> dict:
     second_score = sorted_scores[1] if len(sorted_scores) > 1 else 0
     classifier_confidence = round(top_score / (top_score + second_score + 0.001), 2) if top_score else 0.0
 
+    if top_type in {"framework", "guidance"} and top_score >= 3 and classifier_confidence < 0.75:
+        classifier_confidence = 0.75
+
     document_type = top_type if top_score >= 3 else "unknown"
 
     first_page_text = str(pages[0].get("text", "")) if pages else ""
@@ -463,7 +489,7 @@ def classify_document_type(pages: list[dict]) -> dict:
         "section_tag_map": {},
         "sections_used_for_scoring": [],
         "negative_detection_active": audit_report_mode,
-        "attribution_filter_active": audit_report_mode,
+        "attribution_filter_active": audit_report_mode or document_type in {"framework", "guidance"},
         "retrieval_mismatch_flags": [],
         "llm_preflight_available": None,
         "llm_preflight_message": "Not checked yet.",
@@ -1102,6 +1128,18 @@ def assign_finding_priority(finding: dict) -> dict:
         fix_order = 1
         priority_reason = "Control failure is explicitly indicated or negative evidence was found."
 
+    elif status == "missing" and risk == "high":
+        priority = "P1"
+        severity = "High"
+        fix_order = 1
+        priority_reason = "A high-risk required control is missing and should be remediated before lower-priority gaps."
+
+    elif "penetration" in control and status in {"missing", "partially compliant", "partial"}:
+        priority = "P1" if risk in {"high", "critical"} else "P2"
+        severity = "High" if risk in {"high", "critical"} else "Medium"
+        fix_order = 1 if risk in {"high", "critical"} else 2
+        priority_reason = "Vendor-managed systems require explicit security testing expectations; absence of penetration-testing language is prioritized."
+
     elif any(keyword in control for keyword in p1_controls):
         priority = "P1"
         severity = "High"
@@ -1261,7 +1299,7 @@ def is_tpmr_gap_finding(finding: dict) -> bool:
     if finding.get("is_privacy_overlay") is True and status == "Missing":
         return False
 
-    if status in {"Missing", "Partially Compliant", "Failed", "Needs Manual Review"}:
+    if status in {"Missing", "Partially Compliant", "Failed", "Needs Manual Review", "Out of Scope for Framework"}:
         return True
 
     if risk == "high":

@@ -501,6 +501,7 @@ WEAK_SECTION_PATTERNS = [
 
 
 SECTION_HEADER_PATTERNS = [
+    r"^\s*\d{1,3}\.\s+[A-Za-z].{4,80}$",
     r"^\s*\d{1,2}\.\s+[A-Z][A-Za-z0-9 /&()\-:,]{2,}$",
     r"^\s*[IVXLCDM]{1,6}\.\s+[A-Z][A-Za-z0-9 /&()\-:,]{2,}$",
     r"^\s*Issue\s+\d+\s*[:\-].+",
@@ -765,8 +766,12 @@ def analyze_tpmr_compliance(
     findings = []
 
     if document_context is not None:
+        document_type = str(document_context.get("document_type", "")).lower()
         document_context["negative_detection_active"] = is_audit_report_mode(document_context)
-        document_context["attribution_filter_active"] = is_audit_report_mode(document_context)
+        document_context["attribution_filter_active"] = (
+            is_audit_report_mode(document_context)
+            or document_type in {"framework", "guidance"}
+        )
 
     for control_id, control in TPMR_CONTROLS.items():
         finding = analyze_single_tpmr_control(
@@ -895,6 +900,9 @@ def determine_tpmr_control_risk(control_id: str, status: str, control: dict) -> 
 
 
 def generate_tpmr_recommendation(control_title: str, status: str, control: dict) -> str:
+    control_id = str(control.get("control_id", ""))
+    override_note = str(control.get("status_override_note") or "")
+
     if control.get("privacy_overlay", False):
         if status == "Missing":
             return (
@@ -904,6 +912,53 @@ def generate_tpmr_recommendation(control_title: str, status: str, control: dict)
             f"{control_title} was detected. Review whether vendors process or can access minors' data, "
             f"and ensure parental consent, purpose limitation, and stricter vendor controls are considered."
         )
+
+    if control_id == "sub_processor_controls":
+        if status in {"Missing", "Partially Compliant", "Failed", "Needs Manual Review"}:
+            return (
+                "Add explicit sub-processor / fourth-party controls: require prior approval or notification, "
+                "flow-down security and confidentiality obligations, monitoring of downstream vendors, and "
+                "clear accountability for subcontracted services."
+            )
+
+    if control_id == "incident_response_sla":
+        if status == "Partially Compliant" or "no measurable" in override_note.lower():
+            return (
+                "Existing incident-notification language appears to require prompt or immediate reporting, "
+                "but it does not define a measurable SLA. Add a specific hour/day notification window "
+                "such as 24/48/72 hours, escalation owner, and reporting channel for vendor incidents."
+            )
+        if status == "Missing":
+            return (
+                "Define a measurable vendor incident/breach notification timeline, escalation owner, "
+                "and reporting channel. Avoid relying only on generic incident-response language."
+            )
+
+    if control_id == "penetration_testing_requirement":
+        if status == "Partially Compliant":
+            return (
+                "Independent security scans or validation may be referenced, but penetration testing is not "
+                "explicitly required. Add explicit penetration testing, red-team, or offensive security testing "
+                "requirements for relevant vendor-managed systems."
+            )
+        if status == "Missing":
+            return (
+                "Add an explicit penetration testing or red-team requirement for relevant vendor-managed systems, "
+                "including scope, frequency, reporting, and remediation expectations."
+            )
+
+    if control_id == "data_classification_framework":
+        if status == "Partially Compliant":
+            return (
+                "Confidential-information handling appears in the document, but a formal classification taxonomy "
+                "is not clearly defined. Reference a data classification or sensitivity framework and map vendor "
+                "handling obligations to each classification level."
+            )
+        if status == "Missing":
+            return (
+                "Reference a data classification or sensitivity framework and map vendor handling obligations "
+                "to each classification level."
+            )
 
     if status == "Present":
         return (
@@ -923,6 +978,12 @@ def generate_tpmr_recommendation(control_title: str, status: str, control: dict)
             f"contractual obligations, evidence requirements, or review frequency."
         )
 
+    if status == "Out of Scope for Framework":
+        return (
+            "This is a framework/guidance document. Validate downstream policy, contract, vendor schedule, "
+            "or operating-procedure artefacts before treating this as a direct control gap."
+        )
+
     specific_recommendations = {
         "Incident Response SLA / Timeline": "Define a measurable incident/breach notification timeline, escalation owner, and reporting channel for vendors.",
         "Penetration Testing Requirement": "Add an explicit penetration testing or offensive security testing requirement for relevant vendor-managed systems.",
@@ -935,7 +996,6 @@ def generate_tpmr_recommendation(control_title: str, status: str, control: dict)
     return (
         f"{control_title} is not clearly mentioned. Add a dedicated vendor risk control covering this area."
     )
-
 
 def build_tpmr_summary(findings: list[dict]) -> dict:
     main_findings = [
@@ -1100,6 +1160,21 @@ def split_pages_into_paragraphs(
 # Removed duplicate definition lines 1302-1352; enhanced definition is kept later in this file.
 
 
+
+def boost_data_deletion_audit_candidates(control_id: str, item: dict, document_context: dict | None) -> dict:
+    if control_id != "data_deletion_after_termination":
+        return item
+    if not is_audit_report_mode(document_context):
+        return item
+    text = " ".join([str(item.get("section_header", "")), str(item.get("snippet", ""))]).lower()
+    termination_hit = any(term in text for term in ["termination", "upon termination", "contract termination", "offboarding", "exit", "return", "delete", "destroy", "purge"])
+    audit_section_hit = any(term in text for term in ["issue", "recommendation", "management action", "audit results", "finding"])
+    if termination_hit and audit_section_hit:
+        item = dict(item)
+        item["candidate_score"] = round(float(item.get("candidate_score", 0) or 0) + 0.8, 4)
+        item["candidate_selection_note"] = "Termination/deletion candidate from audit finding or recommendation context."
+    return item
+
 def get_candidate_evidence_for_control(
     pages: list[dict],
     control_id: str,
@@ -1143,6 +1218,10 @@ def get_candidate_evidence_for_control(
                 )
             })
 
+    candidate_evidence = [
+        boost_data_deletion_audit_candidates(control_id, item, document_context)
+        for item in candidate_evidence
+    ]
     candidate_evidence.sort(key=lambda item: item.get("candidate_score", 0), reverse=True)
     return candidate_evidence[:max_snippets]
 
@@ -1666,7 +1745,7 @@ def analyze_single_tpmr_control(
     )
 
     risk = determine_tpmr_control_risk(control_id, status, control)
-    recommendation = generate_tpmr_recommendation(control["title"], status, control)
+    recommendation = generate_tpmr_recommendation(control["title"], status, {**control, "control_id": control_id, "status_override_note": status_override_note if "status_override_note" in locals() else None})
 
     positive_evidence_count = count_evidence_by_sentiment(evidence, "positive")
     negative_evidence_count = count_evidence_by_sentiment(evidence, "negative")
@@ -1686,7 +1765,18 @@ def analyze_single_tpmr_control(
         candidate_evidence=candidate_evidence,
     )
     risk = determine_tpmr_control_risk(control_id, status, control)
-    recommendation = generate_tpmr_recommendation(control["title"], status, control)
+    recommendation = generate_tpmr_recommendation(control["title"], status, {**control, "control_id": control_id, "status_override_note": status_override_note if "status_override_note" in locals() else None})
+
+    scope_note = None
+    status, risk, recommendation, scope_note = apply_document_type_scope_check(
+        control_id=control_id,
+        status=status,
+        risk=risk,
+        recommendation=recommendation,
+        document_context=document_context,
+    )
+    if scope_note:
+        status_override_note = scope_note
 
     related_control_support = infer_related_control_support(control_id, candidate_evidence, evidence)
 
@@ -1804,6 +1894,8 @@ GENERIC_TPMR_SYNONYM_EXPANSION = {
         "access removal on termination", "offboarding process",
     ],
     "data_deletion_after_termination": [
+        "termination clause", "contract termination", "upon termination", "after termination",
+        "management action", "recommendation", "issue", "exit management",
         "return or destroy data", "return or delete data", "secure deletion",
         "secure destruction", "data destruction certificate", "certificate of destruction",
         "data return", "data disposal", "record disposal", "purge data",
@@ -1998,6 +2090,51 @@ def has_soft_incident_notice(text: str) -> bool:
     ))
 
 
+
+def apply_document_type_scope_check(
+    control_id: str,
+    status: str,
+    risk: str,
+    recommendation: str,
+    document_context: dict | None,
+) -> tuple[str, str, str, str | None]:
+    """
+    Framework/guidance documents usually define principles and expectations,
+    while contract-level clauses are implemented in policies, contracts, or vendor schedules.
+    This prevents over-penalizing frameworks for not containing operational contract wording.
+    """
+
+    if not document_context:
+        return status, risk, recommendation, None
+
+    document_type = str(document_context.get("document_type", "")).lower()
+    if document_type not in {"framework", "guidance"}:
+        return status, risk, recommendation, None
+
+    contract_level_controls = {
+        "data_processing_agreement",
+        "incident_response_sla",
+        "penetration_testing_requirement",
+    }
+
+    if control_id not in contract_level_controls:
+        return status, risk, recommendation, None
+
+    if status == "Missing":
+        scope_note = (
+            "This is a framework/guidance document. This control is typically implemented "
+            "at policy, contract, vendor schedule, or operating-procedure level rather than "
+            "inside the framework text itself."
+        )
+        return (
+            "Out of Scope for Framework",
+            "Low",
+            scope_note + " Validate downstream policy/contract artefacts before treating this as a compliance gap.",
+            scope_note,
+        )
+
+    return status, risk, recommendation, None
+
 def apply_control_specific_gap_override(control_id: str, status: str, evidence: list[dict], candidate_evidence: list[dict]) -> tuple[str, str | None]:
     """
     Conservative overrides for controls where adjacent evidence should not be
@@ -2067,3 +2204,4 @@ def is_control_evidence_acceptable(control_id: str, item: dict) -> bool:
         return contains_any(snippet, precise_terms)
 
     return True
+
