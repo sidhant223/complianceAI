@@ -213,26 +213,32 @@ def generate_final_audit_pdf_report(
     story.append(Paragraph("5. DPDP Compliance Summary", styles["Heading2"]))
 
     if not dpdp_applicable:
+        dpdp_scope_review_required = document_context.get("dpdp_scope_review_required", False)
+        applicability_label = (
+            "Not Scored / Manual Scope Review Recommended"
+            if dpdp_scope_review_required
+            else "Not Applicable / Out of Scope"
+        )
         story.append(
             Paragraph(
-                "<b>Applicability:</b> Not Applicable / Out of Scope",
+                f"<b>Applicability:</b> {escape_text(applicability_label)}",
                 styles["Normal"]
             )
         )
 
         story.append(
             Paragraph(
-                f"<b>Reason:</b> {escape_text(dpdp.get('applicability_reason') or framework_applicability.get('applicability_reason', 'DPDP controls were excluded based on document context.'))}",
+                f"<b>Reason:</b> {escape_text(dpdp.get('applicability_reason') or framework_applicability.get('frameworks', {}).get('dpdp', {}).get('reason') or framework_applicability.get('applicability_reason', 'DPDP controls were excluded based on document context.'))}",
                 styles["Normal"]
             )
         )
 
-        story.append(
-            Paragraph(
-                "DPDP controls were not included in effective risk scoring or top audit findings for this document.",
-                styles["Normal"]
-            )
+        note_text = (
+            "DPDP controls were excluded from automated risk scoring, but a human should confirm whether student/staff/personnel or confidential-information processing brings privacy obligations into scope."
+            if dpdp_scope_review_required
+            else "DPDP controls were not included in effective risk scoring or top audit findings for this document."
         )
+        story.append(Paragraph(escape_text(note_text), styles["Normal"]))
 
     else:
         dpdp_table_data = [

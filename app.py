@@ -1,3 +1,6 @@
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse
+
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import FileResponse
 import os
@@ -36,11 +39,13 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(REPORT_DIR, exist_ok=True)
 
 
-@app.get("/")
-def home():
+@app.get("/api")
+def api_home():
     return {
         "message": "Policy Compliance Backend is running",
-        "status": "success"
+        "status": "success",
+        "ui": "/ui",
+        "docs": "/docs"
     }
 
 
@@ -71,47 +76,90 @@ def save_uploaded_pdf(file: UploadFile) -> str:
 
 def normalize_given_tag_simple(given_tag: str) -> dict:
     """
-    Normalizes auditor-entered tag values into standard risk tags.
-    Example:
-    moderate / fair / yellow -> Medium
-    catastrophic / severe / red -> Critical
+    Normalizes the frontend/user input without mixing up two different ideas:
+
+    1. Audit domain/category: TPMR, DPDP, Vendor Risk, General
+    2. Criticality/severity tag: Low, Medium, High, Critical
+
+    Earlier behavior treated "TPMR" as an invalid criticality tag and added a
+    manual-review penalty. That was incorrect because TPMR is an audit domain,
+    not a severity tier.
     """
 
-    tag_map = {
+    raw_tag = str(given_tag or "").strip()
+    normalized_input = raw_tag.lower().replace("-", "_").replace(" ", "_")
+
+    audit_domain_map = {
+        "tpmr": "TPMR",
+        "vendor_risk": "TPMR",
+        "third_party_risk": "TPMR",
+        "third_party_vendor_risk": "TPMR",
+        "dpdp": "DPDP",
+        "privacy": "DPDP",
+        "data_protection": "DPDP",
+        "general": "GENERAL",
+        "general_audit": "GENERAL",
+        "auto": "AUTO",
+    }
+
+    criticality_map = {
         "low": "Low",
         "minor": "Low",
         "green": "Low",
         "basic": "Low",
-
         "medium": "Medium",
         "moderate": "Medium",
         "fair": "Medium",
         "yellow": "Medium",
         "mid": "Medium",
-
         "high": "High",
         "major": "High",
         "serious": "High",
         "orange": "High",
-
         "critical": "Critical",
         "catastrophic": "Critical",
         "severe": "Critical",
-        "red": "Critical"
+        "red": "Critical",
     }
 
-    raw_tag = str(given_tag or "").strip()
-    normalized_tag = tag_map.get(raw_tag.lower())
+    if normalized_input in audit_domain_map:
+        audit_domain = audit_domain_map[normalized_input]
+        return {
+            "raw_tag": raw_tag,
+            "input_type": "audit_domain",
+            "audit_domain": audit_domain,
+            "criticality_tag": "AUTO",
+            "normalized_tag": audit_domain,
+            "normalization_status": "Audit Domain",
+            "normalization_note": (
+                f"Input '{raw_tag}' was treated as an audit domain/category, "
+                "not as a Low/Medium/High/Critical severity tag."
+            ),
+        }
+
+    if normalized_input in criticality_map:
+        criticality_tag = criticality_map[normalized_input]
+        return {
+            "raw_tag": raw_tag,
+            "input_type": "criticality_tag",
+            "audit_domain": "AUTO",
+            "criticality_tag": criticality_tag,
+            "normalized_tag": criticality_tag,
+            "normalization_status": "Normalized",
+            "normalization_note": f"Input tag '{raw_tag}' was normalized to '{criticality_tag}'.",
+        }
 
     return {
         "raw_tag": raw_tag,
-        "normalized_tag": normalized_tag or "Needs Human Review",
-        "normalization_status": "Normalized" if normalized_tag else "Invalid",
+        "input_type": "unknown",
+        "audit_domain": "AUTO",
+        "criticality_tag": "AUTO",
+        "normalized_tag": "Needs Human Review",
+        "normalization_status": "Invalid",
         "normalization_note": (
-            f"Input tag '{raw_tag}' was normalized to '{normalized_tag}'."
-            if normalized_tag
-            else "Input tag could not be normalized to Low, Medium, High, or Critical."
-        )
+            "Input tag could not be recognized as an audit domain "
+            "or as Low, Medium, High, or Critical."
+        ),
     }
 
 
@@ -601,6 +649,18 @@ def determine_framework_applicability(
     vendor_score = domain_scores.get("third_party_vendor", 0)
     security_score = domain_scores.get("security_governance", 0)
 
+    # DPDP should not be a blind yes/no. In education/vendor policies, personal
+    # data may be implicit through students, faculty, staff, employees, and
+    # confidential records even when the phrase "personal data" is absent.
+    # We keep DPDP out of scoring unless clear privacy indicators exist, but flag
+    # the document for human scope review when vendor + people/data context exists.
+    people_context_terms = [
+        "student", "students", "faculty", "staff", "employee", "employees",
+        "temporary employees", "volunteers", "personnel", "background check",
+        "confidential information", "confidential data", "records"
+    ]
+    people_context_score = count_keyword_hits(text, people_context_terms)
+
     # Generic applicability rules
     dpdp_applicable = (
         context_dpdp
@@ -614,20 +674,38 @@ def determine_framework_applicability(
 
     security_applicable = security_score >= 2
 
+    dpdp_scope_review_required = (
+        not dpdp_applicable
+        and vendor_score >= 2
+        and people_context_score >= 2
+    )
+
+    dpdp_scope_reason = (
+        "Clear privacy/data-protection indicators were detected."
+        if dpdp_applicable
+        else (
+            "DPDP was not scored automatically, but manual scope review is recommended because "
+            "the document combines vendor/outsourcing controls with students/staff/personnel or "
+            "confidential-information context."
+            if dpdp_scope_review_required
+            else "Insufficient privacy/personal-data indicators were found. DPDP controls are treated as out of scope."
+        )
+    )
+
     return {
         "primary_domain": primary_domain,
         "detected_domains": detected_domains,
-        "domain_scores": domain_scores,
+        "domain_scores": {
+            **domain_scores,
+            "people_or_records_context": people_context_score,
+        },
 
         "frameworks": {
             "dpdp": {
                 "applicable": dpdp_applicable,
                 "confidence": calculate_applicability_confidence(privacy_score),
-                "reason": (
-                    "Privacy/data-protection indicators were detected."
-                    if dpdp_applicable
-                    else "Insufficient privacy/personal-data indicators were found. DPDP controls are treated as out of scope."
-                )
+                "scope_review_required": dpdp_scope_review_required,
+                "reason": dpdp_scope_reason,
             },
             "tpmr": {
                 "applicable": tpmr_applicable,
@@ -737,6 +815,7 @@ def run_full_audit(file_path: str, given_tag: str) -> dict:
     document_context["detected_domains"] = framework_applicability["detected_domains"]
     document_context["domain_scores"] = framework_applicability["domain_scores"]
     document_context["dpdp_applicable"] = framework_applicability["frameworks"]["dpdp"]["applicable"]
+    document_context["dpdp_scope_review_required"] = framework_applicability["frameworks"]["dpdp"].get("scope_review_required", False)
     document_context["tpmr_applicable"] = framework_applicability["frameworks"]["tpmr"]["applicable"]
 
     signals = detect_criticality_signals(pages)
@@ -745,25 +824,42 @@ def run_full_audit(file_path: str, given_tag: str) -> dict:
 
     tag_normalization = normalize_given_tag_simple(given_tag)
 
-    if tag_normalization["normalization_status"] == "Invalid":
+    if tag_normalization["normalization_status"] == "Audit Domain":
         tag_validation = {
-        "given_tag": tag_normalization["raw_tag"],
-        "normalized_tag": tag_normalization["normalized_tag"],
-        "recommended_tag": score_result["recommended_tag"],
-        "validation_result": "Needs Human Review",
-        "confidence": score_result["confidence"],
-        "reason": (
-            "The provided tag could not be normalized to Low, Medium, High, or Critical. "
-            "A manual review penalty was applied because incorrect or unclear classification "
-            "may cause governance routing risk."
-        )
-    }
+            "given_tag": tag_normalization["raw_tag"],
+            "normalized_tag": tag_normalization["normalized_tag"],
+            "input_type": "audit_domain",
+            "audit_domain": tag_normalization["audit_domain"],
+            "recommended_tag": score_result["recommended_tag"],
+            "validation_result": "Accepted - Audit Domain",
+            "confidence": score_result["confidence"],
+            "reason": (
+                f"The provided input '{tag_normalization['raw_tag']}' was recognized as an audit domain/category. "
+                "It was not penalized as an invalid criticality tier. Criticality was inferred automatically "
+                f"from document signals as '{score_result['recommended_tag']}'."
+            )
+        }
+    elif tag_normalization["normalization_status"] == "Invalid":
+        tag_validation = {
+            "given_tag": tag_normalization["raw_tag"],
+            "normalized_tag": tag_normalization["normalized_tag"],
+            "input_type": "unknown",
+            "recommended_tag": score_result["recommended_tag"],
+            "validation_result": "Needs Human Review",
+            "confidence": score_result["confidence"],
+            "reason": (
+                "The provided input could not be recognized as an audit domain or as "
+                "Low, Medium, High, or Critical. A manual review penalty was applied because "
+                "unclear classification may cause governance routing risk."
+            )
+        }
     else:
         tag_validation = validate_given_tag(
-        given_tag=tag_normalization["normalized_tag"],
-        recommended_tag=score_result["recommended_tag"],
-        confidence=score_result["confidence"]
-    )
+            given_tag=tag_normalization["normalized_tag"],
+            recommended_tag=score_result["recommended_tag"],
+            confidence=score_result["confidence"]
+        )
+        tag_validation["input_type"] = "criticality_tag"
 
     raw_dpdp_result = analyze_dpdp_compliance(pages)
     raw_tpmr_result = analyze_tpmr_compliance(
@@ -1070,116 +1166,218 @@ def filter_findings_by_applicability(
     return filtered_findings
 
 
+
+FORCED_TPMR_GAP_CONTROL_IDS = {
+    "data_processing_agreement",
+    "sub_processor_controls",
+    "incident_response_sla",
+    "penetration_testing_requirement",
+    "data_classification_framework",
+}
+
+
+def should_surface_finding(finding: dict) -> bool:
+    """
+    Decides whether a rule-engine control should appear in Top Findings.
+
+    This fixes under-reporting: every Missing, Partially Compliant, Failed,
+    Needs Manual Review, or High-risk control should be available for final
+    reporting, instead of only one high-risk missing item.
+    """
+
+    status = str(finding.get("status", "")).strip().lower()
+    risk = str(finding.get("risk", "")).strip().lower()
+
+    if finding.get("is_privacy_overlay") is True and status == "missing":
+        return False
+
+    control_id = str(finding.get("control_id", ""))
+    if control_id in FORCED_TPMR_GAP_CONTROL_IDS and status != "present":
+        return True
+
+    return (
+        status in {"failed", "missing", "partially compliant", "partial", "needs manual review"}
+        or risk == "high"
+    )
+
+def normalize_status_value(status: str) -> str:
+    """Normalizes status labels so Partial / Partially Compliant do not get filtered accidentally."""
+    value = str(status or "").strip().lower()
+    if value in {"partial", "partially compliant", "partially covered"}:
+        return "Partially Compliant"
+    if value == "missing":
+        return "Missing"
+    if value == "failed":
+        return "Failed"
+    if value in {"needs manual review", "manual review"}:
+        return "Needs Manual Review"
+    if value == "present":
+        return "Present"
+    return str(status or "").strip()
+
+
+def build_output_finding(finding: dict, source: str) -> dict:
+    """Builds a consistent Top Findings record without losing control IDs/status fields."""
+    status = normalize_status_value(finding.get("status"))
+    return {
+        "source": source,
+        "control_id": finding.get("control_id"),
+        "control": finding.get("control") or finding.get("control_title"),
+        "control_title": finding.get("control_title"),
+        "description": finding.get("description"),
+        "expected_requirement": finding.get("expected_requirement"),
+        "status": status,
+        "rule_status": status,
+        "final_status": finding.get("final_status", status),
+        "risk": finding.get("risk") or "Medium",
+        "recommendation": finding.get("recommendation"),
+        "matched_keywords": finding.get("matched_keywords", []),
+        "negative_evidence_count": finding.get("negative_evidence_count", 0),
+        "evidence_count": finding.get("evidence_count", 0),
+        "positive_evidence_count": finding.get("positive_evidence_count", 0),
+        "candidate_evidence_count": len(finding.get("candidate_evidence", []) or []),
+        "is_privacy_overlay": finding.get("is_privacy_overlay", False),
+        "negative_signal": finding.get("negative_signal", "None"),
+        "negative_signal_source": finding.get("negative_signal_source", "N/A"),
+        "positive_evidence_strength": finding.get("positive_evidence_strength", "N/A"),
+        "audit_report_mode": finding.get("audit_report_mode", False),
+        "status_override_note": finding.get("status_override_note"),
+        "related_control_support": finding.get("related_control_support", []),
+        "evidence": (finding.get("evidence", []) or [])[:3],
+        "candidate_evidence": (finding.get("candidate_evidence", []) or [])[:3],
+    }
+
+
+def is_tpmr_gap_finding(finding: dict) -> bool:
+    """
+    TPMR finding selection rule:
+    every Missing / Partial / Failed / Needs Manual Review TPMR control must be
+    visible in Top Findings. This keeps the Top Findings section reconciled with
+    the TPMR summary counts.
+    """
+    status = normalize_status_value(finding.get("status"))
+    risk = str(finding.get("risk", "")).strip().lower()
+
+    if finding.get("is_privacy_overlay") is True and status == "Missing":
+        return False
+
+    if status in {"Missing", "Partially Compliant", "Failed", "Needs Manual Review"}:
+        return True
+
+    if risk == "high":
+        return True
+
+    return False
+
+
 def extract_top_findings(
     dpdp_findings: list[dict],
     tpmr_findings: list[dict],
     document_context: dict | None = None
 ) -> list[dict]:
     """
-    Extracts high-priority findings from DPDP and TPMR results.
+    Extracts audit findings from DPDP and TPMR results.
 
-    Important:
-    - If DPDP is not applicable based on document context, DPDP findings
-      are not pushed into top_findings.
-    - Candidate evidence is filtered before final output.
-    - Findings are enhanced with regulatory mapping, remediation metadata,
-      and entity-boundary review for consulting-style output.
+    Final selection principle:
+    - DPDP: only surfaced when DPDP is applicable.
+    - TPMR: every non-present TPMR control is surfaced before sorting.
+    - No hidden mismatch: if TPMR summary says 2 Missing and 3 Partial, those
+      controls must be visible as generated Top Findings unless the 20-item cap
+      is explicitly reached.
     """
 
     top_findings = []
+    raw_gap_findings_by_id = {}
 
     dpdp_applicable = True
-
     if document_context:
         dpdp_applicable = document_context.get("dpdp_applicable", True)
 
     if dpdp_applicable:
         for finding in dpdp_findings:
-            if finding.get("status") == "Failed" or finding.get("risk") == "High":
-                top_findings.append({
-                    "source": "DPDP",
-                    "control_id": finding.get("control_id"),
-                    "control": finding.get("control") or finding.get("control_title"),
-                    "control_title": finding.get("control_title"),
-                    "description": finding.get("description"),
-                    "expected_requirement": finding.get("expected_requirement"),
-                    "status": finding.get("status"),
-                    "final_status": finding.get("final_status", finding.get("status")),
-                    "risk": finding.get("risk"),
-                    "recommendation": finding.get("recommendation"),
-                    "matched_keywords": finding.get("matched_keywords", []),
-                    "negative_evidence_count": finding.get("negative_evidence_count", 0),
-                    "evidence_count": finding.get("evidence_count", 0),
-                    "evidence": finding.get("evidence", [])[:3],
-                    "candidate_evidence": finding.get("candidate_evidence", [])[:3]
-                })
+            if should_surface_finding(finding):
+                output = build_output_finding(finding, "DPDP")
+                top_findings.append(output)
 
+    # TPMR: do not rely on only "high-risk" filtering. Surface every non-present
+    # checklist control so Missing/Partial summary counts reconcile with findings.
     for finding in tpmr_findings:
-        if finding.get("status") == "Failed" or finding.get("risk") == "High":
-            top_findings.append({
-                "source": "TPMR",
-                "control_id": finding.get("control_id"),
-                "control": finding.get("control") or finding.get("control_title"),
-                "control_title": finding.get("control_title"),
-                "description": finding.get("description"),
-                "expected_requirement": finding.get("expected_requirement"),
-                "status": finding.get("status"),
-                "final_status": finding.get("final_status", finding.get("status")),
-                "risk": finding.get("risk"),
-                "recommendation": finding.get("recommendation"),
-                "matched_keywords": finding.get("matched_keywords", []),
-                "negative_evidence_count": finding.get("negative_evidence_count", 0),
-                "evidence_count": finding.get("evidence_count", 0),
-                "is_privacy_overlay": finding.get("is_privacy_overlay", False),
-                "negative_signal": finding.get("negative_signal", "None"),
-                "negative_signal_source": finding.get("negative_signal_source", "N/A"),
-                "positive_evidence_strength": finding.get("positive_evidence_strength", "N/A"),
-                "audit_report_mode": finding.get("audit_report_mode", False),
-                "evidence": finding.get("evidence", [])[:3],
-                "candidate_evidence": finding.get("candidate_evidence", [])[:3]
-            })
+        if not is_tpmr_gap_finding(finding):
+            continue
 
-    risk_order = {
-        "High": 3,
-        "Medium": 2,
-        "Low": 1
-    }
+        output = build_output_finding(finding, "TPMR")
+        control_id = output.get("control_id")
+        if control_id:
+            raw_gap_findings_by_id[control_id] = output
+        top_findings.append(output)
 
-    top_findings.sort(
-        key=lambda item: (
-            1 if item.get("status") == "Failed" else 0,
-            risk_order.get(item.get("risk"), 0),
-            item.get("negative_evidence_count", 0),
-            item.get("evidence_count", 0)
-        ),
-        reverse=True
-    )
-
-    top_findings = top_findings[:10]
-    top_findings = filter_candidate_evidence_for_findings(top_findings)
-    top_findings = enhance_findings_for_consulting(top_findings)
+    # Applicability filter first, then candidate cleanup and consulting metadata.
     top_findings = filter_findings_by_applicability(
         top_findings=top_findings,
         document_context=document_context
     )
 
-    top_findings = [
-        assign_finding_priority(finding)
+    expected_tpmr_gap_ids = {
+        finding.get("control_id")
         for finding in top_findings
-    ]
+        if str(finding.get("source", "")).upper() == "TPMR" and finding.get("control_id")
+    }
+
+    top_findings = filter_candidate_evidence_for_findings(top_findings)
+    top_findings = enhance_findings_for_consulting(top_findings)
+
+    # Defensive reconciliation: if any downstream enhancer/filter accidentally
+    # drops a TPMR checklist gap, add it back so counts and names remain visible.
+    visible_tpmr_gap_ids = {
+        finding.get("control_id")
+        for finding in top_findings
+        if str(finding.get("source", "")).upper() == "TPMR" and finding.get("control_id")
+    }
+
+    for missing_id in expected_tpmr_gap_ids - visible_tpmr_gap_ids:
+        restored = raw_gap_findings_by_id.get(missing_id)
+        if restored:
+            restored = filter_candidate_evidence_for_findings([restored])[0]
+            top_findings.append(restored)
+
+    top_findings = [assign_finding_priority(finding) for finding in top_findings]
+
+    risk_order = {
+        "Critical": 4,
+        "High": 3,
+        "Medium": 2,
+        "Low": 1,
+        "Not Applicable": 0,
+    }
 
     top_findings.sort(
         key=lambda item: (
             item.get("fix_order", 99),
-            1 if item.get("status") == "Failed" else 0,
-            risk_order.get(item.get("risk"), 0),
-            item.get("negative_evidence_count", 0),
-            item.get("evidence_count", 0)
-        ),
-        reverse=False
+            0 if item.get("control_id") in FORCED_TPMR_GAP_CONTROL_IDS else 1,
+            0 if normalize_status_value(item.get("status")) == "Failed" else 1,
+            -risk_order.get(item.get("risk"), 0),
+            -int(item.get("negative_evidence_count", 0) or 0),
+            -int(item.get("evidence_count", 0) or 0),
+        )
     )
 
-    return top_findings
+    # Keep the report readable but large enough to avoid hiding checklist gaps.
+    max_top_findings = 20
+    final_findings = top_findings[:max_top_findings]
+
+    if document_context is not None:
+        document_context["top_findings_generation"] = {
+            "selection_rule": "All TPMR Missing/Partial/Failed/Needs Manual Review controls are surfaced before sorting.",
+            "generated_top_findings": len(final_findings),
+            "tpmr_gap_controls_visible": [
+                finding.get("control") for finding in final_findings
+                if str(finding.get("source", "")).upper() == "TPMR"
+            ],
+            "cap": max_top_findings,
+            "cap_reached": len(top_findings) > max_top_findings,
+        }
+
+    return final_findings
 
 
 @app.post("/upload-policy")
@@ -1749,3 +1947,10 @@ def final_audit_pdf_llm(
             "status": "failed",
             "message": str(error)
         }
+
+@app.get("/")
+def home():
+    return RedirectResponse(url="/ui")
+
+
+app.mount("/ui", StaticFiles(directory="frontend", html=True), name="frontend")

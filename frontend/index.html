@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ComplianceAI Audit</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+
+  <div class="page">
+    <header class="navbar">
+      <div class="logo">ComplianceAI</div>
+      <div class="nav-pill">Rule-Based + LLM Review</div>
+    </header>
+
+    <main class="hero">
+      <section class="hero-text">
+        <p class="eyebrow">Compliance Audit Automation</p>
+        <h1>Upload a PDF and generate an audit report.</h1>
+        <p class="subtitle">
+          Run deterministic DPDP and third-party risk checks with optional local LLM semantic review.
+          Generate structured JSON or a polished PDF audit report.
+        </p>
+
+        <div class="feature-row">
+          <span>PDF Upload</span>
+          <span>DPDP Checks</span>
+          <span>TPMR Review</span>
+          <span>LLM Semantic Review</span>
+        </div>
+      </section>
+
+      <section class="audit-card">
+        <h2>Start Audit</h2>
+        <p>Select a PDF file and choose the audit tag.</p>
+
+        <label class="form-label" for="givenTag">Audit Tag</label>
+        <select id="givenTag" class="tag-select">
+          <option value="TPMR">TPMR / Vendor Risk</option>
+          <option value="DPDP">DPDP</option>
+          <option value="Critical">Criticality Review</option>
+          <option value="General">General Audit</option>
+        </select>
+
+        <label class="upload-box" for="pdfFile">
+          <span id="fileText">Choose PDF file</span>
+          <input type="file" id="pdfFile" accept="application/pdf" />
+        </label>
+
+        <div class="button-row">
+          <button id="jsonBtn">Generate JSON</button>
+          <button id="pdfBtn" class="primary">Generate PDF</button>
+        </div>
+
+        <div id="statusBox" class="status-box">
+          Waiting for file upload...
+        </div>
+      </section>
+    </main>
+
+    <section class="output-section">
+      <div class="output-header">
+        <h2>Audit Output</h2>
+        <button id="clearBtn" class="small-btn">Clear</button>
+      </div>
+
+      <pre id="outputBox">No output generated yet.</pre>
+
+      <div id="downloadArea"></div>
+    </section>
+  </div>
+
+  <script src="./script.js"></script>
+</body>
+</html>

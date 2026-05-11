@@ -882,7 +882,10 @@ def analyze_single_tpmr_control(
 
     paragraph_fallback_controls = {
         "right_to_audit",
-        "data_deletion_after_termination"
+        "data_deletion_after_termination",
+        "incident_response_sla",
+        "penetration_testing_requirement",
+        "data_classification_framework"
     }
 
     if control_id in paragraph_fallback_controls and not evidence:
@@ -1036,7 +1039,10 @@ def determine_tpmr_control_risk(control_id: str, status: str, control: dict) -> 
         "vendor_breach_notification",
         "security_assessment",
         "vendor_access_control",
-        "data_deletion_after_termination"
+        "data_deletion_after_termination",
+        "incident_response_sla",
+        "penetration_testing_requirement",
+        "data_classification_framework"
     }
 
     if status == "Present":
@@ -1084,6 +1090,15 @@ def generate_tpmr_recommendation(control_title: str, status: str, control: dict)
             f"{control_title} is mentioned but may need clearer vendor responsibilities, timelines, "
             f"contractual obligations, evidence requirements, or review frequency."
         )
+
+    specific_recommendations = {
+        "Incident Response SLA / Timeline": "Define a measurable incident/breach notification timeline, escalation owner, and reporting channel for vendors.",
+        "Penetration Testing Requirement": "Add an explicit penetration testing or offensive security testing requirement for relevant vendor-managed systems.",
+        "Data Classification Framework": "Reference a data classification or sensitivity framework and map vendor handling obligations to each classification level.",
+    }
+
+    if control_title in specific_recommendations:
+        return specific_recommendations[control_title]
 
     return (
         f"{control_title} is not clearly mentioned. Add a dedicated vendor risk control covering this area."
@@ -1914,6 +1929,16 @@ def analyze_single_tpmr_control(
         document_context=document_context,
     )
 
+    status_override_note = None
+    status, status_override_note = apply_control_specific_gap_override(
+        control_id=control_id,
+        status=status,
+        evidence=evidence,
+        candidate_evidence=candidate_evidence,
+    )
+    risk = determine_tpmr_control_risk(control_id, status, control)
+    recommendation = generate_tpmr_recommendation(control["title"], status, control)
+
     related_control_support = infer_related_control_support(control_id, candidate_evidence, evidence)
 
     return {
@@ -1939,6 +1964,7 @@ def analyze_single_tpmr_control(
         "audit_report_mode": is_audit_report_mode(document_context),
         "recommendation": recommendation,
         "final_status": status,
+        "status_override_note": status_override_note,
     }
 
 
@@ -2074,13 +2100,207 @@ def apply_generic_tpmr_synonyms() -> None:
                     regex_target.append(pattern)
 
 
+
+
+def apply_tpmr_explicit_gap_controls() -> None:
+    """
+    Adds explicit auditable sub-controls so reports do not hide important gaps
+    inside broad parent controls.
+
+    General-purpose, not document-specific:
+    - incident notice exists but no measurable SLA => Partial
+    - security scans exist but no explicit penetration testing => Partial
+    - confidential-information handling exists but no classification taxonomy => Partial
+    - subprocessor/fourth-party controls require explicit downstream terms
+    """
+
+    extra_requirements = {
+        "incident_response_sla": (
+            "The document should define a measurable vendor incident/breach notification SLA or timeline, "
+            "such as a stated hour/day window. Soft wording like immediately/promptly is partial support."
+        ),
+        "penetration_testing_requirement": (
+            "The document should explicitly require penetration testing or equivalent offensive security testing "
+            "for relevant outsourced/vendor-managed systems. General security scans are partial support."
+        ),
+        "data_classification_framework": (
+            "The document should define or reference a data classification framework or sensitivity taxonomy "
+            "that governs vendor handling of information. Confidential-information handling alone is partial support."
+        ),
+    }
+
+    TPMR_CONTROL_REQUIREMENTS.update(extra_requirements)
+
+    extra_controls = {
+        "incident_response_sla": {
+            "title": "Incident Response SLA / Timeline",
+            "description": "Checks whether vendor incident or breach reporting has a measurable timeline/SLA.",
+            "keywords": [
+                "notification timeline", "incident notification timeline", "breach notification timeline",
+                "within 24 hours", "within 48 hours", "within 72 hours", "72-hour window",
+                "72 hour window", "24 hour", "48 hour", "72 hour", "sla", "service level agreement",
+                "immediately", "promptly", "without undue delay", "as soon as practicable",
+                "security incident", "incident reporting", "incident notification", "breach notification"
+            ],
+            "regex": [
+                r"\b\d+\s*(hour|hours|day|days)\b.{0,160}\b(notify|notification|breach|incident|report|escalat)\b",
+                r"\b(notify|notification|breach|incident|report|escalat)\b.{0,160}\b\d+\s*(hour|hours|day|days)\b",
+                r"\b(immediately|promptly|without undue delay|as soon as practicable)\b.{0,160}\b(notify|notification|report|breach|incident)\b",
+                r"\b(notify|notification|report|breach|incident)\b.{0,160}\b(immediately|promptly|without undue delay|as soon as practicable)\b",
+            ],
+        },
+        "penetration_testing_requirement": {
+            "title": "Penetration Testing Requirement",
+            "description": "Checks whether penetration testing is explicitly required for vendor-managed systems.",
+            "keywords": [
+                "penetration test", "penetration testing", "pen test", "pentest",
+                "red team", "ethical hacking", "application security test", "offensive security testing",
+                "independent security scan", "independent security scans", "security scans",
+                "validate the security", "vulnerability assessment", "security validation"
+            ],
+            "regex": [
+                r"\b(penetration\s+test|penetration\s+testing|pen\s*test|pentest|red\s+team|ethical\s+hacking)\b",
+                r"\b(independent\s+security\s+scans?|validate\s+the\s+security|vulnerability\s+assessment)\b",
+            ],
+        },
+        "data_classification_framework": {
+            "title": "Data Classification Framework",
+            "description": "Checks whether vendor handling is tied to data classification or sensitivity levels.",
+            "keywords": [
+                "data classification", "information classification", "classification framework",
+                "classification policy", "data sensitivity", "sensitivity classification",
+                "public internal confidential restricted", "confidential restricted", "handling by classification",
+                "confidential information", "restricted information", "sensitive information",
+                "information handling", "data handling"
+            ],
+            "regex": [
+                r"\b(data|information)\s+classification\b",
+                r"\b(classification\s+(framework|policy|taxonomy)|sensitivity\s+classification)\b",
+                r"\b(confidential|restricted|sensitive)\s+(information|data)\b",
+            ],
+        },
+    }
+
+    for control_id, control in extra_controls.items():
+        existing = TPMR_CONTROLS.setdefault(control_id, control)
+        # If the control already exists, merge fields instead of replacing.
+        existing.setdefault("title", control["title"])
+        existing.setdefault("description", control["description"])
+        existing_keywords = existing.setdefault("keywords", [])
+        for term in control.get("keywords", []):
+            if term not in existing_keywords:
+                existing_keywords.append(term)
+        existing_regex = existing.setdefault("regex", [])
+        for pattern in control.get("regex", []):
+            if pattern not in existing_regex:
+                existing_regex.append(pattern)
+
+    explicit_candidates = {
+        "incident_response_sla": [
+            "incident", "breach", "notify", "notification", "report", "immediately", "promptly",
+            "without undue delay", "security incident", "incident reporting", "sla", "timeline"
+        ],
+        "penetration_testing_requirement": [
+            "penetration test", "penetration testing", "pen test", "pentest", "red team",
+            "security scan", "security scans", "independent security scans", "validate the security",
+            "vulnerability assessment", "security validation", "outsourced systems"
+        ],
+        "data_classification_framework": [
+            "data classification", "information classification", "classification framework",
+            "classification policy", "confidential information", "restricted", "sensitive",
+            "data handling", "information handling"
+        ],
+        "sub_processor_controls": [
+            "sub-processor", "subprocessor", "sub processor", "subcontractor", "subcontracting",
+            "fourth party", "fourth-party", "downstream vendor", "downstream provider",
+            "nth party", "onward transfer", "supply chain", "outsourcing"
+        ],
+    }
+
+    for control_id, terms in explicit_candidates.items():
+        target = TPMR_CANDIDATE_KEYWORDS.setdefault(control_id, [])
+        for term in terms:
+            if term not in target:
+                target.append(term)
+
 apply_tpmr_rule_engine_enhancements()
 apply_generic_tpmr_synonyms()
+apply_tpmr_explicit_gap_controls()
 
+
+
+def has_numeric_incident_sla(text: str) -> bool:
+    """True only when a measurable incident/breach reporting window is present."""
+    return bool(re.search(
+        r"\b\d+\s*(hour|hours|day|days)\b.{0,160}\b(notify|notification|breach|incident|report|escalat)\b|"
+        r"\b(notify|notification|breach|incident|report|escalat)\b.{0,160}\b\d+\s*(hour|hours|day|days)\b",
+        str(text or ""),
+        flags=re.IGNORECASE,
+    ))
+
+
+def has_soft_incident_notice(text: str) -> bool:
+    """Detects non-numeric timing such as immediate/prompt notice. This is only partial support."""
+    return bool(re.search(
+        r"\b(immediately|promptly|without undue delay|as soon as practicable)\b.{0,160}\b(notify|notification|report|breach|incident)\b|"
+        r"\b(notify|notification|report)\b.{0,160}\b(immediately|promptly|without undue delay|as soon as practicable)\b",
+        str(text or ""),
+        flags=re.IGNORECASE,
+    ))
+
+
+def apply_control_specific_gap_override(control_id: str, status: str, evidence: list[dict], candidate_evidence: list[dict]) -> tuple[str, str | None]:
+    """
+    Conservative overrides for controls where adjacent evidence should not be
+    treated as full coverage. Keeps gaps visible in top findings.
+    """
+    combined_evidence = " ".join(str(item.get("snippet", "")) for item in evidence)
+    combined_candidates = " ".join(str(item.get("snippet", "")) for item in candidate_evidence)
+    combined = f"{combined_evidence} {combined_candidates}"
+
+    if control_id == "incident_response_sla":
+        if has_numeric_incident_sla(combined):
+            return "Present", None
+        if has_soft_incident_notice(combined):
+            return "Partially Compliant", (
+                "Incident notification language exists, but no measurable hour/day SLA was detected."
+            )
+        return "Missing", "No measurable incident/breach notification timeline was detected."
+
+    if control_id == "penetration_testing_requirement":
+        lower = combined.lower()
+        explicit_pen_test = any(term in lower for term in ["penetration test", "penetration testing", "pen test", "pentest", "red team", "ethical hacking"])
+        related_security_scan = any(term in lower for term in ["independent security scan", "independent security scans", "validate the security", "security scans", "vulnerability assessment"])
+        if explicit_pen_test:
+            return "Present", None
+        if related_security_scan:
+            return "Partially Compliant", (
+                "Independent security validation/scans are mentioned, but penetration testing is not explicitly required."
+            )
+        return "Missing", "No explicit penetration testing or equivalent offensive security testing requirement was detected."
+
+    if control_id == "data_classification_framework":
+        lower = combined.lower()
+        direct = any(term in lower for term in ["data classification", "information classification", "classification framework", "classification policy", "sensitivity classification", "handling by classification"])
+        adjacent = any(term in lower for term in ["confidential information", "restricted", "sensitive", "information handling"])
+        if direct:
+            return "Present", None
+        if adjacent:
+            return "Partially Compliant", (
+                "Confidential-information handling exists, but no formal classification taxonomy/framework was detected."
+            )
+        return "Missing", "No formal data classification framework or sensitivity taxonomy was detected."
+
+    return status, None
 
 def is_control_evidence_acceptable(control_id: str, item: dict) -> bool:
     """Filters broad false positives for controls that require precise language."""
     snippet = str(item.get("snippet", "")).lower()
+
+    if control_id == "incident_response_sla":
+        # Immediate/prompt notice is useful but not a measurable SLA. Keep it as
+        # candidate/partial support rather than full evidence.
+        return has_numeric_incident_sla(snippet)
 
     if control_id == "data_processing_agreement":
         # General contract/security language supports contractual safeguards,
